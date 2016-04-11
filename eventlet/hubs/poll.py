@@ -73,11 +73,13 @@ class Hub(BaseHub):
         # poll.poll expects integral milliseconds
         return self.poll.poll(int(seconds * 1000.0))
 
-    def wait(self, seconds=None):
+    def wait(self, seconds=None, simulate=False):
         readers = self.listeners[READ]
         writers = self.listeners[WRITE]
 
         if not readers and not writers:
+            if simulate:
+                self.sched_log.append("wait: nothing to do")
             if seconds:
                 sleep(seconds)
             return
@@ -88,6 +90,17 @@ class Hub(BaseHub):
                 return
             raise
         SYSTEM_EXCEPTIONS = self.SYSTEM_EXCEPTIONS
+
+        if simulate:
+            readable = 0
+            writable = 0
+            for fileno, event in presult: # XXX
+                if event & READ_MASK:
+                    readable += 1
+                elif event & WRITE_MASK:
+                    writable += 1
+            self.sched_log.append("wait: %d readable %d writable" % (readable, writable))
+            return
 
         if self.debug_blocking:
             self.block_detect_pre()
@@ -110,6 +123,7 @@ class Hub(BaseHub):
                 callbacks.add((readers.get(fileno, noop), fileno))
                 callbacks.add((writers.get(fileno, noop), fileno))
 
+        self.sched_log.append("wait: %d going to run" % (len(callbacks)))
         for listener, fileno in callbacks:
             try:
                 listener.cb(fileno)

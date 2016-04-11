@@ -1,6 +1,8 @@
+import copy
 import errno
 import heapq
 import math
+import os
 import signal
 import sys
 import traceback
@@ -23,6 +25,8 @@ from eventlet import patcher
 from eventlet.hubs import timer, IOClosed
 from eventlet.support import greenlets as greenlet, clear_sys_exc_info
 time = patcher.original('time')
+
+from eventlet import greenthread # XXX
 
 g_prevent_multiple_readers = True
 
@@ -117,6 +121,7 @@ class BaseHub(object):
         self.listeners = {READ: {}, WRITE: {}}
         self.secondaries = {READ: {}, WRITE: {}}
         self.closed = []
+        self.sched_log = []
 
         self.clock = clock
         self.greenlet = greenlet.greenlet(self.run)
@@ -129,6 +134,11 @@ class BaseHub(object):
         self.debug_exceptions = True
         self.debug_blocking = False
         self.debug_blocking_resolution = 1
+        self.schedule_call_global(5, self.init_log_writer)
+
+
+    def init_log_writer(self):
+        self.log_writer_t = greenthread.spawn(self.log_writer)
 
     def block_detect_pre(self):
         # shortest alarm we can possibly raise is one second
@@ -333,6 +343,8 @@ class BaseHub(object):
                 self.prepare_timers()
                 if self.debug_blocking:
                     self.block_detect_pre()
+                self.fire_timers(self.clock(), simulate=True)
+                self.wait(0, simulate=True)
                 self.fire_timers(self.clock())
                 if self.debug_blocking:
                     self.block_detect_post()
@@ -435,9 +447,17 @@ class BaseHub(object):
         self.add_timer(t)
         return t
 
-    def fire_timers(self, when):
+    def fire_timers(self, when, simulate=False):
         t = self.timers
+        expired = 0
         heappop = heapq.heappop
+
+        if simulate:
+            if not t or when < t[0][0]:
+                self.sched_log.append("fire_timers %f: 0 expired (sim)" % when)
+                return
+
+            t = copy.copy(t)
 
         while t:
             next = t[0]
@@ -450,7 +470,12 @@ class BaseHub(object):
 
             heappop(t)
 
+            if simulate:
+                expired += 1
+                continue
+
             try:
+                self.sched_log.append("fire_timers %f: %s %d %f" % (when, timer, timer.called, exp - when))
                 if timer.called:
                     self.timers_canceled -= 1
                 else:
@@ -460,6 +485,9 @@ class BaseHub(object):
             except:
                 self.squelch_timer_exception(timer, sys.exc_info())
                 clear_sys_exc_info()
+
+        if simulate:
+            self.sched_log.append("fire_timers %f: %d expired (sim)" % (when, expired))
 
     # for debugging:
 
@@ -480,3 +508,14 @@ class BaseHub(object):
 
     def set_timer_exceptions(self, value):
         self.debug_exceptions = value
+
+    def log_writer(self):
+        with open("/tmp/eventlet-%d.log" % os.getpid(), mode='a') as f:
+            while True:
+                greenthread.sleep(5)
+                if not self.sched_log:
+                    continue
+
+                log_text = '\n'.join(self.sched_log) + '\n'
+                self.sched_log = []
+                f.write(log_text)

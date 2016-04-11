@@ -45,6 +45,7 @@ import sys
 import heapq
 import collections
 import traceback
+import time
 
 from eventlet.event import Event
 from eventlet.greenthread import getcurrent
@@ -159,6 +160,7 @@ class LightQueue(object):
             self.maxsize = maxsize
         self.getters = set()
         self.putters = set()
+        self.put_timestamp = None
         self._event_unlock = None
         self._init(maxsize)
 
@@ -171,6 +173,7 @@ class LightQueue(object):
         return self.queue.popleft()
 
     def _put(self, item):
+        self.put_timestamp = time.time()
         self.queue.append(item)
 
     def __repr__(self):
@@ -189,6 +192,8 @@ class LightQueue(object):
             result += ' putters[%s]' % len(self.putters)
         if self._event_unlock is not None:
             result += ' unlocking'
+        if self.put_timestamp is not None:
+            result += ' put_timestamp=%f' % self.put_timestamp
         return result
 
     def qsize(self):
